@@ -65,7 +65,9 @@ static obs_properties_t *filter1_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
 
-	obs_properties_add_int_slider(props, "method","method", 0, 1, 1);
+	obs_property_t *list = obs_properties_add_list(props, "method","method", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_insert_int(list, 0, "bob", 0);
+	obs_property_list_insert_int(list, 1, "blend", 1);
 	obs_properties_add_bool(props, "bff","BottomFieldFirst");
 	obs_properties_add_bool(props, "doubleframe","DoubleFrame");
 
