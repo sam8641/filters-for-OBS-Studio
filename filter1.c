@@ -1,4 +1,21 @@
-//  This deinterlace plugin is for use in OBS Studio
+/* This deinterlace plugin is for use in OBS Studio
+
+This filter depends on having the following functions in obs-source.h
+
+struct obs_source_info:   int number_of_video_frames_needed;      // note: add at the bottom of all other variable/functions
+
+EXPORT bool obs_source_get_source_interlace_fields(obs_source_t *source);
+EXPORT gs_texture_t *obs_source_get_texture(obs_source_t *source, unsigned int i);
+
+
+*/
+
+
+
+
+
+
+
 //	Copyright (c) 2015 Samuel Williams
 //
 //	This program is free software; you can redistribute it and/or modify
@@ -22,7 +39,8 @@
 #include <obs-source.h>
 #include <obs.h>
 #include <util/platform.h>
-#include <obs-internal.h>
+//#include <obs-internal.h>
+
 
 struct filter1_data {
 	obs_source_t                   *context;
@@ -44,7 +62,8 @@ struct filter1_data {
 
 	bool bff; // bottom field first
 	bool doubleframe;
-	bool newFrameRendered;
+	bool framefield;
+	float timepassed;
 	uint64_t prevTimingAdjust;
 };
 
@@ -158,74 +177,11 @@ static void *filter1_create(obs_data_t *settings, obs_source_t *context)
 	return filter;
 }
 
-static void filter1_updateTextureBuffers(struct filter1_data *filter)
+static void filter1_setTextureBuffers1(struct filter1_data *filter)
 {
-	obs_source_t *context1 = filter->context;//->filter_target;
-	if(context1->filter_texrender != 0)
-	{
-		gs_texrender_t *tmp2 = filter->texr2;
-		filter->texr2 = filter->texr1;
-		filter->texr1 = context1->filter_texrender;
-		context1->filter_texrender = tmp2;
-	}
-	else
-	{
-		if (filter->texr1) {gs_texrender_destroy(filter->texr1); filter->texr1 = 0;}
-		if (filter->texr2) {gs_texrender_destroy(filter->texr2); filter->texr2 = 0;}
-	}
-	if(context1->async_convert_texrender != 0)
-	{
-		gs_texrender_t *tmp2 = filter->texr2a;
-		filter->texr2a = filter->texr1a;
-		filter->texr1a = context1->async_convert_texrender;
-		context1->async_convert_texrender = tmp2;
-		if(!tmp2)
-		{
-			context1->async_convert_texrender = gs_texrender_create(GS_BGRX, GS_ZS_NONE);
-		}
-		return;
-	}
-	else
-	{
-		if (filter->texr1a) {gs_texrender_destroy(filter->texr1a); filter->texr1a = 0;}
-		if (filter->texr2a) {gs_texrender_destroy(filter->texr2a); filter->texr2a = 0;}
-	}
-
-	// This next part will probably fail...
-	/*if(context1->async_texture != 0)
-	{
-		gs_texture_t *tmp2 = filter->tex2;
-		filter->tex2 = filter->tex1;
-		filter->tex1 = context1->async_texture;
-		context1->async_texture = tmp2;
-	}
-	else
-	{
-		if (filter->tex1) {gs_texture_destroy(filter->tex1); filter->tex1 = 0;}
-		if (filter->tex2) {gs_texture_destroy(filter->tex2); filter->tex2 = 0;}
-	}*/
+	gs_texture_t *tex1 = obs_source_get_texture(filter->context, 0);
+	gs_texture_t *tex2 = obs_source_get_texture(filter->context, 1);
 	
-}
-static void filter1_setTextureBuffers(struct filter1_data *filter)
-{
-	gs_texture_t *tex1 = 0;
-	gs_texture_t *tex2 = 0;
-	
-	if(filter->texr1)
-		tex1 = gs_texrender_get_texture(filter->texr1);
-	else if(filter->texr1a)
-		tex1 = gs_texrender_get_texture(filter->texr1a);
-	else if(filter->tex1)
-		tex1 = filter->tex1;
-
-	if(filter->texr2)
-		tex2 = gs_texrender_get_texture(filter->texr2);
-	else if(filter->texr2a)
-	{
-		tex2 = gs_texrender_get_texture(filter->texr2a);
-	}
-	else if(filter->tex2)
-		tex2 = filter->tex2;
 
 	if(filter->image1param && tex1)
 		gs_effect_set_texture(filter->image1param, tex1);
@@ -244,23 +200,14 @@ static void filter1_render(void *data, gs_effect_t *effect)
 
 	bool renderBottomField = !filter->bff;
 
-	if(filter->doubleframe || filter->image2param)
+
+	if(filter->doubleframe)
 	{
-		// Got a better way to determine if its a new frame?
-		obs_source_t *context1 = filter->context;
-		while(context1->filter_target)
-			context1 = context1->filter_target;
-		if(context1->timing_adjust != filter->prevTimingAdjust)
-		{
-			if((!filter->newFrameRendered) && filter->image2param != 0)
-				filter1_updateTextureBuffers(filter);
-			filter->newFrameRendered = true;
-		}
-		else if(filter->doubleframe)
-			renderBottomField = !renderBottomField;
+		renderBottomField = (renderBottomField != obs_source_get_source_interlace_fields(filter->context));
 	}
-	if(filter->image2param != 0)
-		filter1_setTextureBuffers(filter);
+
+	//if(filter->image2param != 0)
+		filter1_setTextureBuffers1(filter);
 
 	filter->texwidth =(float)obs_source_get_width(
 			obs_filter_get_target(filter->context));
@@ -286,29 +233,18 @@ static void filter1_tick(void *data, float seconds)
 {
 	struct filter1_data *filter = data;
 
+	filter->timepassed = seconds;
 
 	if(filter->methodLoaded != filter->method)
 		changeEffectShader(filter);
 
-	if(filter->doubleframe || filter->image2param)
-	{
-		// Got a better way to determine if its a new frame?
-		obs_source_t *context1 = filter->context;
-		while(context1->filter_target)
-			context1 = context1->filter_target;
-		if(filter->prevTimingAdjust != context1->timing_adjust)
-		{
-			filter->prevTimingAdjust = context1->timing_adjust;
-			filter->newFrameRendered = false;
-		}
-	}
-}
 
+}
 
 struct obs_source_info filter1_filter = {
 	.id = "filter1_filter",
 	.type = OBS_SOURCE_TYPE_FILTER,
-	.output_flags = OBS_SOURCE_VIDEO,
+	.output_flags = OBS_SOURCE_VIDEO  /*| OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_COLOR_MATRIX */,
 	.get_name = filter1_getname,
 	.create = filter1_create,
 	.destroy = filter1_destroy,
@@ -316,5 +252,6 @@ struct obs_source_info filter1_filter = {
 	.video_render = filter1_render,
 	.get_properties = filter1_properties,
 	.get_defaults = filter1_defaults,
-	.video_tick = filter1_tick
+	.video_tick = filter1_tick,
+	.number_of_video_frames_needed = 2,
 };
